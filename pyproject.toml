@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "scribes"
-version = "0.0.0"
+version = "0.1.0"
 description = ""
 authors = ["Armand Sauzay <35524799+armand-sauzay@users.noreply.github.com>"]
 readme = "README.md"

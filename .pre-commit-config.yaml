@@ -44,3 +44,9 @@ repos:
     rev: v3.6.0-2
     hooks:
       - id: shfmt-docker
+  # - repo: https://github.com/pre-commit/mirrors-mypy
+  #   rev: v1.6.0
+  #   hooks:
+  #     - id: mypy
+  #       args: [--strict, --ignore-missing-imports, --allow-untyped-decorators]
+  #       exclude: tests/

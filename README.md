@@ -1,8 +1,41 @@
-# python-template
+# Scribes
 
-Template for python-based repositories.
+Scribes enables you to clone repositories and apply sweeping changes.
 
-## Usage
+## Getting started
 
-1. Use this repository by specifying it as a template for your repository.
-2. run `./script/bootstrap`
+### Pre-requisites
+
+Scribes relies on git and the [GitHub cli](https://github.com/cli/cli) (gh). You
+can follow install instructions for gh [here](https://github.com/cli/cli)
+
+### Usage
+
+Let's say you want to clone all repos in an organization and apply a sed command
+to all repos, replacing `bar` by `foo`, commit and create PRs.
+
+1. `pip install scribes`
+
+2. Create a configuration file called configuration.yaml, such as the following:
+
+   ```yaml
+   clone:
+   organization_name: "armand-sauzay"
+   include: "^armand-sauzay/all-repos"
+   exclude: "^armand-sauzay/excluded-repo-.*"
+   output_directory: "output"
+   include_forks: false
+   include_archived: false
+   include_private: false
+   ```
+
+3. Run the following commands
+   ```bash
+   scribes clone
+   scribes sed `s/bar/foo/g`
+   scribes commit "branch" "commit message"
+   scribes pr "title" --body "body"
+   ```
+
+🎉 There it is, you have created PRs in all repos that contain `bar` in their
+content and created PRs in all repos with the changes

@@ -36,3 +36,4 @@ jobs:
         id: release
         with:
           github-token: ${{ secrets.ADMIN_TOKEN || secrets.GITHUB_TOKEN }}
+          pypi-token: ${{ secrets.PYPI_TOKEN }}

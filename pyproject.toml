@@ -1,21 +1,24 @@
-######################################################################
-## NOTE: THIS FILE SHOULD BE REPLACED BY RUNNING ./script/bootstrap ##
-######################################################################
-
 [tool.poetry]
-name = "python-template"
-version = "1.0.2"
+name = "scribes"
+version = "0.0.0"
 description = ""
-authors = ["Armand Sauzay <sauzayarmand@gmail.com>"]
+authors = ["Armand Sauzay <35524799+armand-sauzay@users.noreply.github.com>"]
 readme = "README.md"
-packages = [{include = "python_template"}]
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = ">=3.7"
+click = ">=8.1.7"
+rich = ">=13.6.0"
+pyyaml = ">=6.0.1"
+types-pyyaml = ">=6.0.12.12"
 
 
 [tool.poetry.group.test.dependencies]
-pytest = "^7.3.1"
+pytest = ">=7.4.2"
+pytest-mock = ">=3.11.1"
+
+[tool.poetry.scripts]
+scribes = "scribes.cli:main"
 
 [build-system]
 requires = ["poetry-core"]

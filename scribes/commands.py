@@ -12,12 +12,19 @@ class CommandRunner:
         return os.path.exists(path) and os.path.isdir(path)
 
     def checkout_default_branch(self, cwd: str) -> None:
-        default_branch = self.get_default_branch(os.path.basename(cwd))
+        default_branch = self.get_default_branch("/".join(cwd.split("/")[-2:]))
         self.checkout_branch(cwd, default_branch)
 
-    def get_default_branch(self, repo_path: str) -> Any:
+    def get_default_branch(self, repository_name_with_owner: str) -> str:
         result = self._run(
-            ["gh", "repo", "view", repo_path, "--json", "defaultBranchRef"]
+            [
+                "gh",
+                "repo",
+                "view",
+                repository_name_with_owner,
+                "--json",
+                "defaultBranchRef",
+            ]
         )
         return json.loads(result.stdout)["defaultBranchRef"]["name"]
 
@@ -42,7 +49,7 @@ class CommandRunner:
     def remove_non_default_branches(
         self, cwd: str, repository_name_with_owner: str
     ) -> None:
-        result = self._run(["git", "branch", "--list", "--no-color"], cwd=cwd)
+        result = self._run(["git", "branch", "--format=%(refname:short)"], cwd=cwd)
         branches = result.stdout.splitlines()
         default_branch = self.get_default_branch(repository_name_with_owner)
         branches_to_delete = [

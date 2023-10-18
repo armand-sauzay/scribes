@@ -3,6 +3,7 @@ name = "scribes"
 version = "0.1.0"
 description = ""
 authors = ["Armand Sauzay <35524799+armand-sauzay@users.noreply.github.com>"]
+repository = "https://github.com/armand-sauzay/scribes"
 readme = "README.md"
 
 [tool.poetry.dependencies]

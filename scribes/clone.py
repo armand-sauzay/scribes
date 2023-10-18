@@ -4,6 +4,8 @@ import shutil
 from typing import Callable
 
 from rich import print
+from rich.live import Live
+from rich.table import Table
 
 from scribes.utils import save_to_json_file
 
@@ -48,6 +50,15 @@ def clone_single_repository(repo_name_with_owner, output_directory, command_runn
 
 
 def clone_all_repositories(config, command_runner: Callable):
+    def generate_table(status_dict) -> Table:
+        """Generate the table for Live display."""
+        table = Table()
+        table.add_column("Status")
+        table.add_column("Repo Name")
+        for repo, status in status_dict.items():
+            table.add_row(status, repo)
+        return table
+
     print(
         f"[bold cyan]Listing repositories for {config.organization_name}...[/bold cyan]"
     )
@@ -61,15 +72,28 @@ def clone_all_repositories(config, command_runner: Callable):
 
     clean_extra_directories(config, filtered_repositories)
 
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        futures = [
-            executor.submit(
-                clone_single_repository,
-                repo["nameWithOwner"],
-                config.output_directory,
-                command_runner,
-            )
-            for repo in filtered_repositories
-        ]
-        concurrent.futures.wait(futures)
+    status_dict = {repo["nameWithOwner"]: "🔄 Cloning" for repo in filtered_repositories}
+
+    with Live(generate_table(status_dict), refresh_per_second=4) as live:
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = {
+                executor.submit(
+                    clone_single_repository,
+                    repo["nameWithOwner"],
+                    config.output_directory,
+                    command_runner,
+                ): repo["nameWithOwner"]
+                for repo in filtered_repositories
+            }
+
+            for future in concurrent.futures.as_completed(futures):
+                repo_name = futures[future]
+                try:
+                    future.result()
+                    status_dict[repo_name] = "✅ Cloned"
+                except Exception as e:
+                    status_dict[repo_name] = f"❌ Error: {e}"
+
+                live.update(generate_table(status_dict))
+
     print("[bold cyan]Done![/bold cyan]")

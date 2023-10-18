@@ -7,7 +7,8 @@ Scribes enables you to clone repositories and apply sweeping changes.
 ### Pre-requisites
 
 Scribes relies on git and the [GitHub cli](https://github.com/cli/cli) (gh). You
-can follow install instructions for gh [here](https://github.com/cli/cli)
+can follow install instructions for gh [here](https://github.com/cli/cli). You
+can then authenticate using `gh auth login`.
 
 ### Usage
 
@@ -20,13 +21,13 @@ to all repos, replacing `bar` by `foo`, commit and create PRs.
 
    ```yaml
    clone:
-   organization_name: "armand-sauzay"
-   include: "^armand-sauzay/all-repos"
-   exclude: "^armand-sauzay/excluded-repo-.*"
-   output_directory: "output"
-   include_forks: false
-   include_archived: false
-   include_private: false
+     organization_name: "my-organization"
+     include: "^my-organization/tf-"
+     exclude: "^my-organization/tf-bar-.*"
+     output_directory: "output"
+     include_forks: false
+     include_archived: false
+     include_private: false
    ```
 
 3. Run the following commands

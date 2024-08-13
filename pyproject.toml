@@ -7,19 +7,17 @@ repository = "https://github.com/armand-sauzay/scribes"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = ">=3.7"
-click = ">=8.1.7"
-rich = ">=13.6.0"
-pyyaml = ">=6.0.1"
-types-pyyaml = ">=6.0.12.12"
+python = ">=3.8"
+click = "8.1.7"
+pydantic = "2.8.2"
 
 
 [tool.poetry.group.test.dependencies]
-pytest = ">=7.4.2"
-pytest-mock = ">=3.11.1"
+pytest = "7.4.2"
+pytest-mock = "3.11.1"
 
 [tool.poetry.scripts]
-scribes = "scribes.cli:main"
+scribes = "scribes.cli:cli"
 
 [build-system]
 requires = ["poetry-core"]

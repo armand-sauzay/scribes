@@ -1,230 +1,255 @@
 import json
+import multiprocessing
+import os
+import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable, List, Optional
 
 import click
-from rich import print
+from pydantic import BaseModel, ValidationError
 
-from scribes.clone import clone_all_repositories
-from scribes.commands import CommandRunner
-from scribes.config import Config
-from scribes.executor import execute_concurrently
+CONFIG_FILE = os.path.join(os.getcwd(), "scribes.json")
+REPO_DIR = os.path.join(os.getcwd(), "scribes_repos")
+
+
+class ScribesConfig(BaseModel):
+    org: str
+    repos: List[str]
+    filtered_repos: List[str] = []
+    cloned_repos: List[str] = []
+    modified_repos: List[str] = []
+
+
+def load_config() -> ScribesConfig:
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE) as f:
+                return ScribesConfig(**json.load(f))
+        except ValidationError as e:
+            print(f"Configuration error: {e}")
+            exit(1)
+    else:
+        org = click.prompt("Enter GitHub organization name")
+        config_data = {
+            "org": org,
+            "repos": [],
+            "filtered_repos": [],
+            "cloned_repos": [],
+            "modified_repos": [],
+        }
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(config_data, f)
+        return ScribesConfig(**config_data)
+
+
+def save_config(config: ScribesConfig) -> None:
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config.model_dump(), f)
+
+
+def get_repositories(org: str) -> List[str]:
+    result = subprocess.run(
+        ["gh", "repo", "list", org, "--json", "name,isFork"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    repos = json.loads(result.stdout)
+    return [f"{org}/{repo['name']}" for repo in repos if not repo["isFork"]]
+
+
+def check_file_exists(repo: str, file_path: str) -> tuple:
+    result = subprocess.run(
+        ["gh", "api", f"/repos/{repo}/contents/{file_path}"],
+        capture_output=True,
+        text=True,
+    )
+    return (
+        repo,
+        result.returncode == 0,
+        result.stderr.strip() if result.returncode != 0 else "",
+    )
+
+
+def clone_repository(repo: str) -> tuple:
+    repo_path = os.path.join(REPO_DIR, repo.split("/")[-1])
+    try:
+        if os.path.exists(repo_path):
+            shutil.rmtree(repo_path)
+        result = subprocess.run(
+            ["gh", "repo", "clone", repo, repo_path], capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            return repo, result.stdout.strip(), ""
+        else:
+            return repo, "", result.stderr.strip()
+    except Exception as e:
+        return repo, "", str(e)
+
+
+def run_command_on_repo(repo: str, command: str) -> tuple:
+    repo_path = os.path.join(REPO_DIR, repo.split("/")[-1])
+    try:
+        result = subprocess.run(
+            command, cwd=repo_path, shell=True, capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            return repo, result.stdout.strip(), ""
+        else:
+            return repo, "", result.stderr.strip()
+    except Exception as e:
+        return repo, "", str(e)
+
+
+def run_in_parallel(repos: List[str], func: Callable, *args) -> List[str]:
+    def log_and_append_result(future, results):
+        repo, stdout, stderr = future.result()
+        click.echo(f'Running "{func.__name__}" on {repo}')
+        if stdout:
+            click.echo(f"Output for {repo}:\n{stdout}\n")
+        if stderr:
+            click.echo(f"Error for {repo}:\n{stderr}\n")
+        results.append(repo)
+
+    results = []
+    with ThreadPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
+        futures = {executor.submit(func, repo, *args): repo for repo in repos}
+
+        for future in as_completed(futures):
+            log_and_append_result(future, results)
+
+    return results
+
+
+def run_command(repos: List[str], func: Callable, parallel: bool, *args) -> List[str]:
+    results = []
+    if parallel:
+        results = run_in_parallel(repos, func, *args)
+    else:
+        for repo in repos:
+            result = func(repo, *args)
+            repo, stdout, stderr = result
+            click.echo(f'Running "{func.__name__}" on {repo}')
+            if stdout:
+                click.echo(f"Output for {repo}:\n{stdout}\n")
+            if stderr:
+                click.echo(f"Error for {repo}:\n{stderr}\n")
+            results.append(repo)
+    return results
 
 
 @click.group()
-@click.pass_context
-def main(ctx):
-    """Scribes CLI."""
-    ctx.obj = Config()
+def cli() -> None:
+    pass
 
 
-@main.command()
-@click.pass_obj
-def clone(config):
-    """."""
-    clone_all_repositories(config, CommandRunner())
+@click.command()
+def search() -> None:
+    if os.path.exists(CONFIG_FILE):
+        os.remove(CONFIG_FILE)
+    config = load_config()
+    org = config.org
+    repos = get_repositories(org)
+    config.repos = repos
+    save_config(config)
+    click.echo(f"Repositories found: {repos}")
 
 
-def update_single_repository_with_sed(repo_path, sed_operation, pattern, dry_run):
-    """Update a single repository using sed."""
-    try:
-        # Using subprocess to chain the commands
-        cmd1 = subprocess.Popen(
-            ["git", "ls-files", "-z", pattern], cwd=repo_path, stdout=subprocess.PIPE
-        )
-        cmd2 = subprocess.Popen(
-            ["xargs", "-0", "sed", "-i", sed_operation],
-            cwd=repo_path,
-            stdin=cmd1.stdout,
-            stdout=subprocess.PIPE,
-        )
-        cmd2.communicate()
-
-        if dry_run:
-            result = subprocess.run(["git", "diff", "--exit-code"], cwd=repo_path)
-            if result.returncode != 0:
-                print(f"[yellow]Changes detected in {repo_path}[/yellow]")
-            subprocess.run(["git", "restore", "."], cwd=repo_path)
-        else:
-            status = subprocess.run(
-                ["git", "status", "--porcelain"],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-            )
-            if status.stdout.strip():
-                print(f"[green]Successfully updated {repo_path}[/green]")
-            else:
-                print(f"[blue]No changes to update in {repo_path}[/blue]")
-
-    except Exception as e:
-        print(f"[red]Error updating {repo_path}: {e}[/red]")
-
-
-@main.command()
-@click.argument("sed_operation", required=True)
+@click.command()
 @click.option(
-    "--pattern",
-    default="*",
-    required=False,
-    help='File pattern to target. Default is "*".',
+    "--contains-file", help="Filter repositories that contain the specified file"
+)
+def filter(contains_file: Optional[str]) -> None:
+    config = load_config()
+    repos = config.repos
+    filtered_repos = repos
+
+    if contains_file:
+        filtered_repos = run_in_parallel(repos, check_file_exists, contains_file)
+
+    config.filtered_repos = filtered_repos
+    save_config(config)
+    click.echo(f"Repositories filtered: {filtered_repos}")
+
+
+@click.command()
+@click.option(
+    "--limit", default=None, type=int, help="Limit the number of repositories to clone"
 )
 @click.option(
-    "--dry-run",
+    "--parallel", is_flag=True, default=True, help="Clone repositories in parallel"
+)
+def clone(limit: Optional[int], parallel: bool) -> None:
+    config = load_config()
+    repos = config.filtered_repos if config.filtered_repos else config.repos
+
+    if limit:
+        repos = repos[:limit]
+
+    os.makedirs(REPO_DIR, exist_ok=True)
+
+    cloned_repos = run_command(repos, clone_repository, parallel)
+    config.cloned_repos = cloned_repos
+    save_config(config)
+    click.echo(f"Repositories cloned: {cloned_repos}")
+
+
+@click.command()
+def get_modified_repos() -> None:
+    config = load_config()
+    click.echo(f"Modified repositories: {config.modified_repos}")
+
+
+@click.command()
+@click.argument("command")
+@click.option("--parallel", is_flag=True, default=True, help="Run command in parallel")
+@click.option(
+    "--modified-only",
     is_flag=True,
     default=False,
-    help="Run sed without actually changing files.",
+    help="Run command only on modified repositories",
 )
-@click.pass_obj
-def sed(cli, sed_operation, pattern, dry_run):
-    """Apply sed command to all repositories in parallel."""
-    repo_dirs = cli.filtered_repo_dirs
-    args_list = [(repo_dir, sed_operation, pattern, dry_run) for repo_dir in repo_dirs]
-    execute_concurrently(update_single_repository_with_sed, args_list)
-
-
-def restore_single_repository(repo_path):
-    """Restore a single repository to its last committed state."""
-    try:
-        result = subprocess.run(
-            ["git", "reset", "--hard"], cwd=repo_path, capture_output=True, text=True
-        )
-        if result.returncode == 0:
-            print(f"[green]Successfully restored {repo_path}[/green]")
-        else:
-            print(f"[red]Failed to restore {repo_path}[/red]\n{result.stderr}")
-    except Exception as e:
-        print(f"[red]Error restoring {repo_path}: {e}[/red]")
-
-
-@main.command()
-@click.pass_obj
-def restore(cli):
-    """Restore all repositories to their last committed state."""
-    repo_dirs = cli.filtered_repo_dirs
-    args_list = [(repo_dir,) for repo_dir in repo_dirs]
-    execute_concurrently(restore_single_repository, args_list)
-
-
-def commit_changes_in_repository(repo_path, branch_name, commit_message):
-    """Commit changes in a single repository."""
-
-    changes = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=repo_path, capture_output=True, text=True
+def run(command: str, parallel: bool, modified_only: bool) -> None:
+    config = load_config()
+    repos = config.modified_repos if modified_only else config.cloned_repos
+    click.echo(
+        f'Running "{command}" across {"modified" if modified_only else "cloned"} repositories'
     )
-    if not changes.stdout.strip():
-        print(f"[blue]No changes to commit in {repo_path}[/blue]")
-        return
-
-    try:
-        status_result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=repo_path,
-            capture_output=True,
-            text=True,
-        )
-
-        if status_result.stdout.strip():
-            subprocess.run(
-                ["git", "checkout", "-b", branch_name],
-                cwd=repo_path,
-                capture_output=True,
-            )
-
-            subprocess.run(["git", "add", "-A"], cwd=repo_path)
-            commit_result = subprocess.run(
-                ["git", "commit", "-m", commit_message],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-            )
-
-            if commit_result.returncode == 0:
-                print(
-                    f"[green]Successfully committed changes in {repo_path} on branch {branch_name}[/green]"  # noqa
-                )
-            else:
-                print(
-                    f"[red]Failed to commit in {repo_path}[/red]\n{commit_result.stderr}"  # noqa
-                )
-        else:
-            print(f"[blue]No changes to commit in {repo_path}[/blue]")
-
-    except Exception as e:
-        print(f"[red]Error committing in {repo_path}: {e}[/red]")
+    run_command(repos, run_command_on_repo, parallel, command)
 
 
-def create_pr_in_repository(repo_path, title, body):
-    """Create a pull request in a single repository using 'gh pr create'."""
-    default_branch_response = subprocess.run(
-        ["gh", "repo", "view", "--json", "defaultBranchRef"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-    )
-    default_branch = json.loads(default_branch_response.stdout)["defaultBranchRef"][
-        "name"
-    ]
-    current_branch_response = subprocess.run(
-        ["git", "branch", "--show-current"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-    )
-    current_branch = current_branch_response.stdout.strip()
-    if current_branch == default_branch:
-        print(
-            f"[blue]Skipping PR creation in {repo_path} because it is still on the default branch {default_branch}[/blue]"  # noqa
-        )
-        return
-
-    try:
-        result = subprocess.run(
-            [
-                "gh",
-                "pr",
-                "create",
-                "--title",
-                title,
-                "--body",
-                body,
-                "--head",
-                current_branch,
-            ],
-            cwd=repo_path,
-            capture_output=True,
-            text=True,
-        )
-
-        if result.returncode == 0:
-            print(f"[green]Successfully created PR in {repo_path}[/green]")
-        else:
-            print(f"[red]Failed to create PR in {repo_path}[/red]\n{result.stderr}")
-
-    except Exception as e:
-        print(f"[red]Error creating PR in {repo_path}: {e}[/red]")
+@click.command()
+@click.argument("repo")
+def add_repo(repo: str) -> None:
+    config = load_config()
+    if repo not in config.cloned_repos:
+        config.cloned_repos.append(repo)
+        save_config(config)
+        click.echo(f"Repository {repo} added to cloned list.")
+    else:
+        click.echo(f"Repository {repo} is already in the cloned list.")
 
 
-@main.command()
-@click.argument("branch_name", required=True)
-@click.argument("commit_message", required=True)
-@click.pass_obj
-def commit(cli, branch_name, commit_message):
-    """Commit all changes in the repositories."""
-    args_list = [
-        (repo_dir, branch_name, commit_message) for repo_dir in cli.filtered_repo_dirs
-    ]
-    execute_concurrently(commit_changes_in_repository, args_list)
+@click.command()
+@click.argument("repo")
+def remove_repo(repo: str) -> None:
+    config = load_config()
+    if repo in config.cloned_repos:
+        config.cloned_repos.remove(repo)
+        save_config(config)
+        click.echo(f"Repository {repo} removed from cloned list.")
+    else:
+        click.echo(f"Repository {repo} is not in the cloned list.")
 
 
-@main.command()
-@click.argument("title", required=True)
-@click.option("--body", default="", help="Body of the pull request.")
-@click.pass_obj
-def pr(cli, title, body):
-    """Create pull requests in all repositories using 'gh pr create'."""
-    args_list = [(repo_dir, title, body) for repo_dir in cli.filtered_repo_dirs]
-    execute_concurrently(create_pr_in_repository, args_list)
-
+cli.add_command(search)
+cli.add_command(filter)
+cli.add_command(clone)
+cli.add_command(get_modified_repos)
+cli.add_command(run)
+cli.add_command(add_repo)
+cli.add_command(remove_repo)
 
 if __name__ == "__main__":
-    main()
+    cli()
